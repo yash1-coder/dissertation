@@ -30,6 +30,9 @@ The default quota is 3Gb. This quota is the total size of your repository
 If you need a larger quota you will need to provide a justification,
 and the support of your supervisor and/or the module team.
 
+See also the sections later on ignoring irrelevant files/folders and
+on how to deal with large data files.
+
 ## Push your changes
 
 You are strongly advised to push your changes to gitlab regularly
@@ -62,27 +65,6 @@ status and committing and pushing it to git.
 If you want to record significant points in the development of your
 project (for example the status on one of the project modules
 milestones) then you should create a `branch` marking that stage.
-
-## Large data files
-
-You need to carefully consider how you will handle large data files
-associated with your project. See also the section "Ignore
-non-essential files".
-
-The gitlab server has LFS (Large File Storage) enabled and you are
-encouraged to use it for data files in general. See
-https://git-lfs.com/
-
-LFS can mitigate the growth in size of your project commit history -
-but you should note that the files still contribute to your quota
-usage.
-
-If the end product of your project involves the creation of very large
-data files (eg models; animations or other video data; etc) then you
-should *not* push them to your gitlab repository, but arrange some
-other way to share them with your supervisor and the module assessment
-team. For example, uploading to your university OneDrive account and
-sharing.
 
 ## Ignore non-essential files
 
@@ -118,3 +100,37 @@ For example:
     versions) you are making use of.
 * File system artefacts - for example MacOS systems always have a hidden
   `.DS_Store` file in every folder.
+
+## Large data files
+
+You need to carefully consider how you will handle large data files
+associated with your project. See also the section "Ignore
+non-essential files".
+
+If the end product of your project involves the creation of very large
+data files (eg models; animations or other video data; etc) then you
+should *not* push them to your gitlab repository, but arrange some
+other way to share them with your supervisor and the module assessment
+team. For example, uploading to your university OneDrive account and
+sharing.
+
+### git-lfs (Large File Storage)
+
+The gitlab server has LFS (Large File Storage) enabled and you are
+encouraged to use it for data files in general. See
+https://git-lfs.com/
+
+LFS can mitigate the growth in size of your project commit history -
+but you should note that the files still contribute to your quota
+usage.
+
+### git-annex
+
+The CMS gitlab installation does not directly support
+[git-annex](https://git-annex.branchable.com/), but you may be able
+use it with your local copy of the repository to automate support for
+storing large data files remotely without needing to commit them
+directly to gitlab.
+
+(If you have direct experience with git-annex, please get in touch so
+we can update this FAQ.)
