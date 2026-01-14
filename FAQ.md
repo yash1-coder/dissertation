@@ -1,6 +1,6 @@
 # CMS Project gitlab FAQ
 
-## Where is my repo?
+## Where is my gitlab repository?
 
 (needs updating for each cohort)
 
