@@ -4,7 +4,7 @@
 
 (needs updating for each cohort)
 
-https://campus.cs.le.ac.uk/gitlab/pgt_project/25_26_Autumn/UID
+https://campus.cs.le.ac.uk/gitlab/pgt_project/25_26_Spring/UID
 
 ## Who has access?
 
@@ -21,6 +21,13 @@ involved in the project also have access.
 Gitlab has an automatic anti-brute-force-login mechanism. If you fail
 to login 5 times within 10 minutes your gitlab account will be blocked
 from all actions for 10 more minutes.
+
+Gitlab now requires 2-Factor Authentication (2FA). If you have not
+already set this up, next time you login to Gitlab it will ask you to
+set up 2FA by registering with the authenticator app of your choice
+(*eg* Microsoft Authenticator or Google Authenticator; you will almost
+certainly already use one of these for MFA access to other university
+resources).
 
 ## Quota
 
@@ -48,8 +55,8 @@ All modern IDE tools have integrated git connectivity. You should make
 use of this facility in almost all cases (for example, rather than
 relying on basic command line use of git to manage your code).
 
-You will probably find it convenient to create a gitlab access token
-to facilitate your IDE's gitlab connection.
+You will almost certainly need to create gitlab access tokens
+to facilitate your IDE's gitlab connection. See below for more details.
 
 ## Your repository should correspond to your actual working environment
 
@@ -100,6 +107,63 @@ For example:
     versions) you are making use of.
 * File system artefacts - for example MacOS systems always have a hidden
   `.DS_Store` file in every folder.
+
+## Use access tokens in your development environment
+
+2FA works well to allow access to the Gitlab web interface, but it
+does not integrate with your development environment. The solution is
+to create an "Access Token" which you can incorporate into your
+project's URL.
+
+### Create an access token
+
+1. Go to your project's main page in the gitlab web interface
+2. Go to "Settings" -> "Access Tokens"
+3. Create a new access token.
+   * Set the expiry date appropriately
+   * Set the token's role to Developer
+   * Include `read_repository` and `write_repository` permissions
+4. As soon as it is created, you need to copy/paste and save the
+   access token - you only get one chance to do that.
+   The token will be something like `glpat-XXXXXXXXXX` where
+   `XXXXXXXXXX` is a long string of random looking characters.
+
+### Use the token - update project URL
+
+Previously your project URL would have been something like
+`https://campus.cs.le.ac.uk/gitlab/ug_project/24-25/abc123` or
+`https://campus.cs.le.ac.uk/gitlab/pgt_project/25_26_Autumn/abc123`
+where `abc123` is your own username.
+
+You need to update this URL by including the access token. For example,
+something like
+`https://abc123:glpat-XXXXXXXXXX@campus.cs.le.ac.uk/gitlab/ug_project/24-25/abc123`
+or `https://abc123:glpat-XXXXXXXXXX@campus.cs.le.ac.uk/gitlab/pgt_project/24_25_Autumn/abc123`
+
+#### Update the "remote origin"
+
+If you have an existing clone of your repository checked out and in
+use (for example in your development environment), then you need to
+update the "remote origin" in the clone's setup.
+
+For example, using the command line, something like this:
+```bash
+$ git remote -v   # check what the remote origin is currently
+$ git remote set-url origin https://abc123:glpat-XXXXXXXXXX@campus.cs.le.ac.uk/gitlab/ug_project/24-25/abc123
+$ git remote -v   # check it was updated properly
+```
+
+Once you have done this successfully, you should be able to push/pull to your
+repository without being prompted for the password (or going through MFA).
+
+#### Clone a fresh copy
+
+Alternatively you could clone a fresh copy of your repository so that
+the new URL is included from the start.
+```bash
+$ git clone https://abc123:glpat-XXXXXXXXXX@campus.cs.le.ac.uk/gitlab/ug_project/24-25/abc123
+```
+
 
 ## Large data files
 
