@@ -27,7 +27,7 @@ Desirable:
 - Compare two variants within one architecture family (e.g., shallow vs deep ResNet or ViT-Tiny vs ViT-Base) to assess depth effects on explanation behaviour.
 - Implement a limited model-agnostic explanation method (LIME or SHAP) for controlled cross-method comparison.
 - Perform class-wise analysis to determine whether certain land-use categories exhibit differing explanation patterns across architectures.
-- Develop an interactive Jupyter notebook to explore predictions, explanations, and failure cases.
+- Develop an interactive Google Colab to explore predictions, explanations, and failure cases.
 - Extend quantitative evaluation with additional robustness or consistency metrics where feasible.
 
 Optional:
