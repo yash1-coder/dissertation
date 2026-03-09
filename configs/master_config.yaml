@@ -1,0 +1,103 @@
+project:
+  name: coloring-black-boxes
+  author: Yash Chourasia
+  student_id: '249015981'
+  email: yc432@student.le.ac.uk
+  seed: 42
+data:
+  dataset: EuroSAT
+  data_dir: /home/yash/yc432/EuroSAT
+  splits_dir: /home/yash/yc432/data/splits
+  num_classes: 10
+  image_size: 64
+  channels: 3
+  split_ratios:
+    train: 0.7
+    val: 0.15
+    test: 0.15
+  split_seed: 42
+augmentation:
+  train:
+    random_horizontal_flip: 0.5
+    random_vertical_flip: 0.5
+    random_rotation_degrees: 15
+    color_jitter:
+      brightness: 0.2
+      contrast: 0.2
+      saturation: 0.1
+      hue: 0.05
+    normalize_mean:
+    - 0.485
+    - 0.456
+    - 0.406
+    normalize_std:
+    - 0.229
+    - 0.224
+    - 0.225
+  eval:
+    normalize_mean:
+    - 0.485
+    - 0.456
+    - 0.406
+    normalize_std:
+    - 0.229
+    - 0.224
+    - 0.225
+training:
+  resnet18:
+    pretrained: true
+    pretrained_source: torchvision_imagenet1k
+    optimizer: AdamW
+    lr: 0.0001
+    weight_decay: 0.01
+    scheduler: CosineAnnealingLR
+    epochs: 30
+    batch_size: 64
+    num_workers: 2
+  vit_tiny:
+    pretrained: true
+    pretrained_source: timm_imagenet21k
+    model_name: vit_tiny_patch16_224
+    patch_size: 16
+    optimizer: AdamW
+    lr: 0.0001
+    weight_decay: 0.01
+    scheduler: CosineAnnealingLR
+    epochs: 30
+    batch_size: 64
+    num_workers: 2
+  vim:
+    pretrained: false
+    optimizer: AdamW
+    lr: 0.0001
+    lr_fallback: 1.0e-05
+    weight_decay: 0.01
+    scheduler: CosineAnnealingLR
+    warmup_epochs: 5
+    epochs: 30
+    batch_size: 64
+    num_workers: 2
+    fp16: true
+xai:
+  integrated_gradients:
+    n_steps: 50
+    baseline: zero
+  smoothgrad:
+    n_samples: 50
+    noise_sigma_fraction: 0.1
+  gradcam:
+    target_layer: layer4
+    upsample_size:
+    - 64
+    - 64
+  attention_rollout:
+    discard_ratio: 0.0
+evaluation:
+  n_test_images: 200
+  insertion_deletion_steps: 20
+  stability_noise_levels:
+  - 0.01
+  - 0.05
+  - 0.1
+  sensitivity_top_k_fraction: 0.2
+  min_failure_patterns: 3
