@@ -1,9 +1,9 @@
 {
   "n_samples": 120,
-  "faithfulness_mean_drop": 0.6961803520196402,
-  "faithfulness_std": 0.39852252270023236,
-  "stability_mean_cosine": 0.8648827036221822,
-  "stability_std": 0.09176472169405334,
-  "sensitivity_mean_top_minus_random": 0.03718191313806093,
-  "sensitivity_std": 0.25739997749740345
+  "faithfulness_mean_drop": 0.7885886523921869,
+  "faithfulness_std": 0.37598267725848933,
+  "stability_mean_cosine": 0.8694079210360844,
+  "stability_std": 0.09369315190511415,
+  "sensitivity_mean_top_minus_random": 0.044948498728864965,
+  "sensitivity_std": 0.17851552807982662
 }

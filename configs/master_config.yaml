@@ -6,8 +6,8 @@ project:
   seed: 42
 data:
   dataset: EuroSAT
-  data_dir: /home/yash/yc432/EuroSAT
-  splits_dir: /home/yash/yc432/data/splits
+  data_dir: /Users/yashchourasia/Desktop/dissertation/yc432/data/2750
+  splits_dir: /Users/yashchourasia/Desktop/dissertation/yc432/data/splits
   num_classes: 10
   image_size: 64
   channels: 3
@@ -53,7 +53,7 @@ training:
     scheduler: CosineAnnealingLR
     epochs: 30
     batch_size: 64
-    num_workers: 2
+    num_workers: 0
   vit_tiny:
     pretrained: true
     pretrained_source: timm_imagenet21k
@@ -65,7 +65,7 @@ training:
     scheduler: CosineAnnealingLR
     epochs: 30
     batch_size: 64
-    num_workers: 2
+    num_workers: 0
   vim:
     pretrained: false
     optimizer: AdamW
@@ -76,7 +76,7 @@ training:
     warmup_epochs: 5
     epochs: 30
     batch_size: 64
-    num_workers: 2
+    num_workers: 0
     fp16: true
 xai:
   integrated_gradients:
