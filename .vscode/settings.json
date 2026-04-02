@@ -3,6 +3,9 @@
   "python.analysis.extraPaths": [
     "${workspaceFolder}/src"
   ],
+  "python.analysis.ignore": [
+    "CNN.ipynb"
+  ],
   "python.analysis.diagnosticMode": "workspace",
   "jupyter.jupyterServerType": "local"
 }
