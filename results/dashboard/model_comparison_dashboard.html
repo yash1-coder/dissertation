@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ResNet18 vs ViT Dashboard</title>
+  <style>
+    :root { --bg:#f4f7f5; --ink:#123; --res:#2f6f9f; --vit:#2a9d8f; --card:#ffffff; --line:#d9e2dc; --warn:#8a5a00; --bad:#8b1e3f; }
+    body { font-family: 'Avenir Next', 'Segoe UI', sans-serif; margin:0; background:var(--bg); color:var(--ink); }
+    .wrap { max-width: 1100px; margin: 28px auto; padding: 0 18px; }
+    h1 { margin:0 0 8px; font-size: 30px; }
+    .sub { color:#405; opacity:.9; margin-bottom:16px; }
+    .hint { font-size:12px; margin-top:4px; opacity:.8; }
+    .cards { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:12px; margin-bottom:16px; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px 14px; }
+    .card h3 { margin:0; font-size:13px; opacity:.8; font-weight:600; }
+    .card p { margin:8px 0 0; font-size:18px; font-weight:700; }
+    .panel { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:14px; }
+    .metric-row { margin-bottom:12px; }
+    .metric-title { font-weight:700; margin-bottom:6px; text-transform:capitalize; }
+    .bar-label { font-size:12px; margin:4px 0; }
+    .bar-wrap { height:10px; background:#e9eeeb; border-radius:999px; overflow:hidden; }
+    .bar { height:100%; border-radius:999px; }
+    .bar.resnet { background:var(--res); }
+    .bar.vit { background:var(--vit); }
+    table.metrics-table { width:100%; border-collapse:collapse; font-size:13px; }
+    .metrics-table th, .metrics-table td { border:1px solid var(--line); padding:8px; text-align:left; }
+    .metrics-table thead th { background:#edf3ef; }
+    .links a { margin-right:12px; }
+    .error { color:var(--bad); font-size:13px; margin-top:8px; }
+    .warning { color:var(--warn); font-size:13px; margin-top:8px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>ResNet18 vs ViT Tiny</h1>
+    <div id="status" class="sub">Live refresh every 5s. Loading latest metrics...</div>
+    <div id="protocolHint" class="warning" style="display:none"></div>
+
+    <div id="cards" class="cards"></div>
+
+    <div class="panel">
+      <h2 style="margin-top:0">Metric Bars</h2>
+      <div id="bars"></div>
+    </div>
+
+    <div class="panel">
+      <h2 style="margin-top:0">Comparison Table</h2>
+      <div id="tableWrap"></div>
+    </div>
+
+    <div class="links">
+      <a href="../metrics/model_comparison_summary.csv" target="_blank">CSV</a>
+      <a href="../metrics/vit_tiny_xai_quant_metrics.json" target="_blank">ViT XAI JSON</a>
+      <a href="../metrics/resnet18_xai_quant_metrics.json" target="_blank">ResNet XAI JSON</a>
+    </div>
+
+    <div id="error" class="error" style="display:none"></div>
+  </div>
+
+  <script>
+    const CSV_PATH = "../metrics/model_comparison_summary.csv";
+    const REFRESH_MS = 5000;
+    const METRICS = [
+      "accuracy",
+      "macro_f1",
+      "faithfulness_mean_drop",
+      "stability_mean_cosine",
+      "sensitivity_mean_top_minus_random"
+    ];
+
+    const elStatus = document.getElementById("status");
+    const elCards = document.getElementById("cards");
+    const elBars = document.getElementById("bars");
+    const elTableWrap = document.getElementById("tableWrap");
+    const elError = document.getElementById("error");
+    const elProtocolHint = document.getElementById("protocolHint");
+
+    function parseCsvLine(line) {
+      const values = [];
+      let cur = "";
+      let inQuotes = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (ch === '"') {
+          if (inQuotes && line[i + 1] === '"') {
+            cur += '"';
+            i += 1;
+          } else {
+            inQuotes = !inQuotes;
+          }
+        } else if (ch === "," && !inQuotes) {
+          values.push(cur);
+          cur = "";
+        } else {
+          cur += ch;
+        }
+      }
+      values.push(cur);
+      return values;
+    }
+
+    function parseCsv(text) {
+      const lines = text.trim().split(/\r?\n/).filter(Boolean);
+      if (!lines.length) return [];
+      const headers = parseCsvLine(lines[0]);
+      return lines.slice(1).map((line) => {
+        const cols = parseCsvLine(line);
+        const row = {};
+        headers.forEach((h, i) => {
+          row[h] = cols[i] ?? "";
+        });
+        return row;
+      });
+    }
+
+    function toNum(v) {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : 0;
+    }
+
+    function fmt6(v) { return toNum(v).toFixed(6); }
+    function fmt4(v) { return toNum(v).toFixed(4); }
+    function pct(v) {
+      const raw = toNum(v) * 100;
+      const clamped = Math.max(0, Math.min(100, raw));
+      return clamped.toFixed(2) + "%";
+    }
+
+    function rowByName(rows, name) {
+      return rows.find((r) => (r.model || "").trim() === name);
+    }
+
+    function computeDelta(vit, resnet) {
+      const d = { model: "Delta (ViT - ResNet18)" };
+      METRICS.forEach((m) => {
+        d[m] = (toNum(vit[m]) - toNum(resnet[m])).toString();
+      });
+      return d;
+    }
+
+    function render(rows) {
+      const resnet = rowByName(rows, "ResNet18");
+      const vit = rowByName(rows, "ViT Tiny");
+      if (!resnet || !vit) {
+        throw new Error("CSV is missing required rows: 'ResNet18' and/or 'ViT Tiny'.");
+      }
+      const delta = rowByName(rows, "Delta (ViT - ResNet18)") || computeDelta(vit, resnet);
+
+      const bestAcc = toNum(vit.accuracy) >= toNum(resnet.accuracy) ? "ViT Tiny" : "ResNet18";
+      const bestF1 = toNum(vit.macro_f1) >= toNum(resnet.macro_f1) ? "ViT Tiny" : "ResNet18";
+
+      elCards.innerHTML = [
+        `<div class="card"><h3>Best Accuracy</h3><p>${bestAcc}</p></div>`,
+        `<div class="card"><h3>Best Macro-F1</h3><p>${bestF1}</p></div>`,
+        `<div class="card"><h3>Delta Accuracy</h3><p>${toNum(delta.accuracy) >= 0 ? "+" : ""}${fmt6(delta.accuracy)}</p></div>`,
+        `<div class="card"><h3>Delta Macro-F1</h3><p>${toNum(delta.macro_f1) >= 0 ? "+" : ""}${fmt6(delta.macro_f1)}</p></div>`
+      ].join("\n");
+
+      elBars.innerHTML = METRICS.map((m) => {
+        return `
+          <div class="metric-row">
+            <div class="metric-title">${m}</div>
+            <div class="bar-group">
+              <div class="bar-label">ResNet18 (${fmt4(resnet[m])})</div>
+              <div class="bar-wrap"><div class="bar resnet" style="width:${pct(resnet[m])}"></div></div>
+              <div class="bar-label">ViT Tiny (${fmt4(vit[m])})</div>
+              <div class="bar-wrap"><div class="bar vit" style="width:${pct(vit[m])}"></div></div>
+            </div>
+          </div>
+        `;
+      }).join("\n");
+
+      const head = `<thead><tr>${["model", ...METRICS].map((h) => `<th>${h}</th>`).join("")}</tr></thead>`;
+      const bodyRows = [resnet, vit, delta].map((r) => {
+        const cells = [`<td>${r.model}</td>`].concat(METRICS.map((m) => `<td>${fmt6(r[m])}</td>`));
+        return `<tr>${cells.join("")}</tr>`;
+      }).join("\n");
+
+      elTableWrap.innerHTML = `<table class="metrics-table">${head}<tbody>${bodyRows}</tbody></table>`;
+    }
+
+    async function refresh() {
+      try {
+        const res = await fetch(`${CSV_PATH}?t=${Date.now()}`, { cache: "no-store" });
+        if (!res.ok) {
+          throw new Error(`Failed to load CSV (${res.status} ${res.statusText})`);
+        }
+        const text = await res.text();
+        const rows = parseCsv(text);
+        render(rows);
+        elError.style.display = "none";
+        elStatus.textContent = `Live refresh every ${Math.round(REFRESH_MS/1000)}s. Last updated: ${new Date().toLocaleString()}`;
+      } catch (err) {
+        elError.style.display = "block";
+        elError.textContent = `Live refresh error: ${err.message}`;
+      }
+    }
+
+    if (window.location.protocol === "file:") {
+      elProtocolHint.style.display = "block";
+      elProtocolHint.textContent = "Open via local server for live fetch (e.g., from yc432: python3 -m http.server 8000, then open http://localhost:8000/results/dashboard/model_comparison_dashboard.html).";
+    }
+
+    refresh();
+    setInterval(refresh, REFRESH_MS);
+  </script>
+</body>
+</html>

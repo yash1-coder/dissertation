@@ -7,5 +7,6 @@
     "CNN.ipynb"
   ],
   "python.analysis.diagnosticMode": "workspace",
-  "jupyter.jupyterServerType": "local"
+  "jupyter.jupyterServerType": "local",
+  "python.terminal.activateEnvironment": true
 }

@@ -1,0 +1,9 @@
+{
+  "n_samples": 120,
+  "faithfulness_mean_drop": 0.7528083066382123,
+  "faithfulness_std": 0.3985952833844225,
+  "stability_mean_cosine": 0.9278905908266704,
+  "stability_std": 0.03354795781340388,
+  "sensitivity_mean_top_minus_random": 0.1636379181221249,
+  "sensitivity_std": 0.3959295074931739
+}
