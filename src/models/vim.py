@@ -1,15 +1,14 @@
 """
 Minimal Vision Mamba / Vim-Tiny implementation for EuroSAT classification.
 
-This module is adapted from the official Vim architecture path from the
-`hustvl/Vim` repository. The official release expects a custom bi-Mamba style
-runtime interface, so this dissertation version keeps the same classification
-structure while building explicit bidirectional mixing from the upstream
-`mamba-ssm` runtime.
+This module keeps the original Linux/CUDA-backed Vision Mamba path while also
+providing a stronger CPU-only branch that preserves the core Vim design using a
+pure-PyTorch selective scan backend.
 """
 
 from __future__ import annotations
 
+import math
 import platform
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -34,13 +33,7 @@ else:
 
 
 class _MambaCPUFallback(nn.Module):
-    """CPU-compatible gated-conv SSM approximation used when mamba-ssm is unavailable.
-
-    Matches the mamba_ssm.Mamba interface (d_model, d_state, d_conv, expand,
-    layer_idx) and produces the same (B, L, D) output shape. The SSM dynamics
-    are approximated by a depthwise Conv1d + SiLU gate — sufficient for local
-    architecture smoke-tests but NOT equivalent to the full selective-scan kernel.
-    """
+    """Lightweight interface-compatible fallback for local Vim smoke tests."""
 
     def __init__(
         self,
@@ -59,10 +52,10 @@ class _MambaCPUFallback(nn.Module):
         self.out_proj = nn.Linear(d_inner, d_model, bias=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        B, L, _ = x.shape
+        _, seq_len, _ = x.shape
         xz = self.in_proj(x)
         x_part, z = xz.chunk(2, dim=-1)
-        x_part = self.conv1d(x_part.transpose(1, 2))[..., :L].transpose(1, 2)
+        x_part = self.conv1d(x_part.transpose(1, 2))[..., :seq_len].transpose(1, 2)
         return self.out_proj(F.silu(x_part) * F.silu(z))
 
 
@@ -150,6 +143,25 @@ class VimConfig:
     use_middle_cls_token: bool = True
 
 
+@dataclass
+class VimCPUFullConfig:
+    img_size: int = 224
+    patch_size: int = 16
+    stride: int = 16
+    in_chans: int = 3
+    num_classes: int = 1000
+    embed_dim: int = 128
+    depth: int = 6
+    d_state: int = 4
+    d_conv: int = 4
+    expand: int = 2
+    mlp_ratio: float = 4.0
+    drop_rate: float = 0.0
+    drop_path_rate: float = 0.1
+    use_cls_token: bool = True
+    use_middle_cls_token: bool = True
+
+
 def vim_runtime_status(require_cuda: bool = True) -> tuple[bool, str]:
     """Return whether the local runtime is suitable for executing Vim."""
 
@@ -176,6 +188,82 @@ def vim_runtime_status(require_cuda: bool = True) -> tuple[bool, str]:
         )
 
     return True, "Vim runtime looks available."
+
+
+def _init_vim_style_weights(module: nn.Module, head: nn.Linear, pos_embed: nn.Parameter, cls_token: nn.Parameter | None) -> None:
+    nn.init.trunc_normal_(pos_embed, std=0.02)
+    if cls_token is not None:
+        nn.init.trunc_normal_(cls_token, std=0.02)
+    nn.init.trunc_normal_(head.weight, std=0.02)
+    nn.init.zeros_(head.bias)
+
+    for submodule in module.modules():
+        if isinstance(submodule, nn.Linear) and submodule is not head:
+            nn.init.trunc_normal_(submodule.weight, std=0.02)
+            if submodule.bias is not None:
+                nn.init.zeros_(submodule.bias)
+        elif isinstance(submodule, (nn.Conv1d, nn.Conv2d)):
+            nn.init.kaiming_normal_(submodule.weight, mode="fan_out")
+            if submodule.bias is not None:
+                nn.init.zeros_(submodule.bias)
+        elif isinstance(submodule, nn.LayerNorm):
+            nn.init.ones_(submodule.weight)
+            nn.init.zeros_(submodule.bias)
+
+
+class _CheckpointMixin:
+    config: VimConfig | VimCPUFullConfig
+
+    def checkpoint_payload(self, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = {
+            "model_state_dict": self.state_dict(),
+            "config": asdict(self.config),
+        }
+        if extra:
+            payload.update(extra)
+        return payload
+
+    def save_checkpoint(self, path: str | Path, extra: dict[str, Any] | None = None) -> Path:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(self.checkpoint_payload(extra=extra), path)
+        return path
+
+
+class _VisionMambaBase(_CheckpointMixin, nn.Module):
+    def _setup_tokens(
+        self,
+        embed_dim: int,
+        use_cls_token: bool,
+        use_middle_cls_token: bool,
+        num_patches: int,
+        drop_rate: float,
+    ) -> None:
+        self.use_cls_token = use_cls_token
+        self.use_middle_cls_token = use_middle_cls_token
+        if self.use_cls_token:
+            self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+            self.num_tokens = 1
+        else:
+            self.cls_token = None
+            self.num_tokens = 0
+
+        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + self.num_tokens, embed_dim))
+        self.pos_drop = nn.Dropout(drop_rate)
+
+    def _insert_cls_token(self, x: torch.Tensor) -> tuple[torch.Tensor, int | None]:
+        if not self.use_cls_token or self.cls_token is None:
+            return x, None
+
+        batch_size, seq_len, _ = x.shape
+        cls_token = self.cls_token.expand(batch_size, -1, -1)
+        if self.use_middle_cls_token:
+            token_position = seq_len // 2
+            x = torch.cat((x[:, :token_position], cls_token, x[:, token_position:]), dim=1)
+        else:
+            token_position = 0
+            x = torch.cat((cls_token, x), dim=1)
+        return x, token_position
 
 
 class BidirectionalMambaMixer(nn.Module):
@@ -236,7 +324,7 @@ class VimBlock(nn.Module):
         return x + self.drop_path(self.mixer(self.norm(x)))
 
 
-class VisionMamba(nn.Module):
+class VisionMamba(_VisionMambaBase):
     """
     Minimal classification-oriented Vision Mamba implementation.
 
@@ -258,19 +346,13 @@ class VisionMamba(nn.Module):
             in_chans=config.in_chans,
             embed_dim=config.embed_dim,
         )
-        num_patches = self.patch_embed.num_patches
-        self.use_cls_token = config.use_cls_token
-        self.use_middle_cls_token = config.use_middle_cls_token
-
-        if self.use_cls_token:
-            self.cls_token = nn.Parameter(torch.zeros(1, 1, config.embed_dim))
-            self.num_tokens = 1
-        else:
-            self.cls_token = None
-            self.num_tokens = 0
-
-        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + self.num_tokens, config.embed_dim))
-        self.pos_drop = nn.Dropout(config.drop_rate)
+        self._setup_tokens(
+            embed_dim=config.embed_dim,
+            use_cls_token=config.use_cls_token,
+            use_middle_cls_token=config.use_middle_cls_token,
+            num_patches=self.patch_embed.num_patches,
+            drop_rate=config.drop_rate,
+        )
 
         dpr = torch.linspace(0, config.drop_path_rate, config.depth).tolist()
         self.layers = nn.ModuleList(
@@ -289,43 +371,7 @@ class VisionMamba(nn.Module):
         self.norm = nn.LayerNorm(config.embed_dim)
         self.head = nn.Linear(config.embed_dim, config.num_classes)
 
-        self._init_weights()
-
-    def _init_weights(self) -> None:
-        nn.init.trunc_normal_(self.pos_embed, std=0.02)
-        if self.cls_token is not None:
-            nn.init.trunc_normal_(self.cls_token, std=0.02)
-        nn.init.trunc_normal_(self.head.weight, std=0.02)
-        nn.init.zeros_(self.head.bias)
-
-        for module in self.modules():
-            if isinstance(module, nn.Linear) and module is not self.head:
-                nn.init.trunc_normal_(module.weight, std=0.02)
-                if module.bias is not None:
-                    nn.init.zeros_(module.bias)
-            elif isinstance(module, nn.Conv2d):
-                nn.init.kaiming_normal_(module.weight, mode="fan_out")
-                if module.bias is not None:
-                    nn.init.zeros_(module.bias)
-            elif isinstance(module, nn.LayerNorm):
-                nn.init.ones_(module.weight)
-                nn.init.zeros_(module.bias)
-
-    def _insert_cls_token(self, x: torch.Tensor) -> tuple[torch.Tensor, int | None]:
-        if not self.use_cls_token or self.cls_token is None:
-            return x, None
-
-        batch_size, seq_len, _ = x.shape
-        cls_token = self.cls_token.expand(batch_size, -1, -1)
-
-        if self.use_middle_cls_token:
-            token_position = seq_len // 2
-            x = torch.cat((x[:, :token_position], cls_token, x[:, token_position:]), dim=1)
-        else:
-            token_position = 0
-            x = torch.cat((cls_token, x), dim=1)
-
-        return x, token_position
+        _init_vim_style_weights(self, self.head, self.pos_embed, self.cls_token)
 
     def forward_features(self, x: torch.Tensor) -> torch.Tensor:
         x = self.patch_embed(x)
@@ -343,25 +389,242 @@ class VisionMamba(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.head(self.forward_features(x))
 
-    def checkpoint_payload(self, extra: dict[str, Any] | None = None) -> dict[str, Any]:
-        payload = {
-            "model_state_dict": self.state_dict(),
-            "config": asdict(self.config),
-        }
-        if extra:
-            payload.update(extra)
-        return payload
-
-    def save_checkpoint(self, path: str | Path, extra: dict[str, Any] | None = None) -> Path:
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(self.checkpoint_payload(extra=extra), path)
-        return path
-
     @classmethod
     def from_checkpoint(cls, path: str | Path, map_location: str | torch.device = "cpu") -> "VisionMamba":
         payload = torch.load(path, map_location=map_location)
         config = VimConfig(**payload["config"])
+        model = cls(config)
+        state_dict = payload.get("model_state_dict", payload)
+        model.load_state_dict(state_dict)
+        return model
+
+
+class CPUFullMLP(nn.Module):
+    def __init__(self, dim: int, mlp_ratio: float = 4.0, drop: float = 0.0) -> None:
+        super().__init__()
+        hidden_dim = int(dim * mlp_ratio)
+        self.fc1 = nn.Linear(dim, hidden_dim)
+        self.act = nn.GELU()
+        self.drop1 = nn.Dropout(drop)
+        self.fc2 = nn.Linear(hidden_dim, dim)
+        self.drop2 = nn.Dropout(drop)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.fc1(x)
+        x = self.act(x)
+        x = self.drop1(x)
+        x = self.fc2(x)
+        return self.drop2(x)
+
+
+class CPUSelectiveScanMixer(nn.Module):
+    """Pure-PyTorch selective scan mixer for CPU-friendly Vision Mamba blocks."""
+
+    def __init__(
+        self,
+        d_model: int,
+        d_state: int = 8,
+        d_conv: int = 4,
+        expand: int = 2,
+        layer_idx: int | None = None,
+    ) -> None:
+        super().__init__()
+        self.d_model = d_model
+        self.d_state = d_state
+        self.d_inner = int(expand * d_model)
+        self.dt_rank = max(8, math.ceil(d_model / 16))
+
+        self.in_proj = nn.Linear(d_model, self.d_inner * 2, bias=False)
+        self.conv1d = nn.Conv1d(
+            self.d_inner,
+            self.d_inner,
+            kernel_size=d_conv,
+            padding=d_conv - 1,
+            groups=self.d_inner,
+            bias=True,
+        )
+        self.x_proj = nn.Linear(self.d_inner, self.dt_rank + (2 * d_state), bias=False)
+        self.dt_proj = nn.Linear(self.dt_rank, self.d_inner, bias=True)
+
+        base = torch.arange(1, d_state + 1, dtype=torch.float32)
+        self.A_log = nn.Parameter(torch.log(base).repeat(self.d_inner, 1))
+        self.D = nn.Parameter(torch.ones(self.d_inner))
+        self.out_proj = nn.Linear(self.d_inner, d_model, bias=False)
+
+    def _selective_scan(
+        self,
+        x_part: torch.Tensor,
+        dt: torch.Tensor,
+        b_term: torch.Tensor,
+        c_term: torch.Tensor,
+    ) -> torch.Tensor:
+        batch_size, seq_len, inner_dim = x_part.shape
+        state = x_part.new_zeros(batch_size, inner_dim, self.d_state)
+        a = -torch.exp(self.A_log).unsqueeze(0)
+        d_skip = self.D.view(1, inner_dim)
+        outputs: list[torch.Tensor] = []
+
+        for idx in range(seq_len):
+            x_t = x_part[:, idx, :]
+            dt_t = dt[:, idx, :].unsqueeze(-1)
+            b_t = b_term[:, idx, :].unsqueeze(1)
+            c_t = c_term[:, idx, :].unsqueeze(1)
+
+            delta_a = torch.exp(dt_t * a)
+            delta_b = (1.0 - delta_a) * b_t
+            state = (delta_a * state) + (delta_b * x_t.unsqueeze(-1))
+            y_t = (state * c_t).sum(dim=-1) + (d_skip * x_t)
+            outputs.append(y_t.unsqueeze(1))
+
+        return torch.cat(outputs, dim=1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        _, seq_len, _ = x.shape
+        xz = self.in_proj(x)
+        x_part, z = xz.chunk(2, dim=-1)
+        x_part = self.conv1d(x_part.transpose(1, 2))[..., :seq_len].transpose(1, 2)
+        x_part = F.silu(x_part)
+
+        dt_bc = self.x_proj(x_part)
+        dt_part, b_term, c_term = torch.split(dt_bc, [self.dt_rank, self.d_state, self.d_state], dim=-1)
+        dt = F.softplus(self.dt_proj(dt_part)) + 1e-4
+        b_term = torch.tanh(b_term)
+        c_term = torch.tanh(c_term)
+
+        y = self._selective_scan(x_part, dt, b_term, c_term)
+        y = y * F.silu(z)
+        return self.out_proj(y)
+
+
+class BidirectionalCPUSelectiveMixer(nn.Module):
+    def __init__(
+        self,
+        d_model: int,
+        d_state: int = 8,
+        d_conv: int = 4,
+        expand: int = 2,
+        layer_idx: int | None = None,
+    ) -> None:
+        super().__init__()
+        self.forward_mixer = CPUSelectiveScanMixer(
+            d_model=d_model,
+            d_state=d_state,
+            d_conv=d_conv,
+            expand=expand,
+            layer_idx=layer_idx,
+        )
+        self.backward_mixer = CPUSelectiveScanMixer(
+            d_model=d_model,
+            d_state=d_state,
+            d_conv=d_conv,
+            expand=expand,
+            layer_idx=layer_idx,
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        y_forward = self.forward_mixer(x)
+        y_backward = torch.flip(self.backward_mixer(torch.flip(x, dims=[1])), dims=[1])
+        return 0.5 * (y_forward + y_backward)
+
+
+class VimCPUFullBlock(nn.Module):
+    def __init__(
+        self,
+        dim: int,
+        d_state: int = 8,
+        d_conv: int = 4,
+        expand: int = 2,
+        mlp_ratio: float = 4.0,
+        drop: float = 0.0,
+        drop_path_prob: float = 0.0,
+        layer_idx: int | None = None,
+    ) -> None:
+        super().__init__()
+        self.norm1 = nn.LayerNorm(dim)
+        self.mixer = BidirectionalCPUSelectiveMixer(
+            d_model=dim,
+            d_state=d_state,
+            d_conv=d_conv,
+            expand=expand,
+            layer_idx=layer_idx,
+        )
+        self.norm2 = nn.LayerNorm(dim)
+        self.mlp = CPUFullMLP(dim=dim, mlp_ratio=mlp_ratio, drop=drop)
+        self.drop_path = DropPath(drop_path_prob) if drop_path_prob > 0 else nn.Identity()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x + self.drop_path(self.mixer(self.norm1(x)))
+        x = x + self.drop_path(self.mlp(self.norm2(x)))
+        return x
+
+
+class VisionMambaCPUFull(_VisionMambaBase):
+    """CPU-oriented Vision Mamba branch with pure-PyTorch selective scan blocks."""
+
+    def __init__(self, config: VimCPUFullConfig) -> None:
+        super().__init__()
+        self.config = config
+        self.num_classes = config.num_classes
+        self.embed_dim = config.embed_dim
+
+        self.patch_embed = PatchEmbed(
+            img_size=config.img_size,
+            patch_size=config.patch_size,
+            stride=config.stride,
+            in_chans=config.in_chans,
+            embed_dim=config.embed_dim,
+        )
+        self._setup_tokens(
+            embed_dim=config.embed_dim,
+            use_cls_token=config.use_cls_token,
+            use_middle_cls_token=config.use_middle_cls_token,
+            num_patches=self.patch_embed.num_patches,
+            drop_rate=config.drop_rate,
+        )
+
+        dpr = torch.linspace(0, config.drop_path_rate, config.depth).tolist()
+        self.layers = nn.ModuleList(
+            [
+                VimCPUFullBlock(
+                    dim=config.embed_dim,
+                    d_state=config.d_state,
+                    d_conv=config.d_conv,
+                    expand=config.expand,
+                    mlp_ratio=config.mlp_ratio,
+                    drop=config.drop_rate,
+                    drop_path_prob=float(dpr[idx]),
+                    layer_idx=idx,
+                )
+                for idx in range(config.depth)
+            ]
+        )
+        self.norm = nn.LayerNorm(config.embed_dim)
+        self.head = nn.Linear(config.embed_dim, config.num_classes)
+
+        _init_vim_style_weights(self, self.head, self.pos_embed, self.cls_token)
+
+    def forward_features(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.patch_embed(x)
+        x, cls_position = self._insert_cls_token(x)
+        x = self.pos_drop(x + self.pos_embed)
+
+        for layer in self.layers:
+            x = layer(x)
+
+        x = self.norm(x)
+        if cls_position is None:
+            return x.mean(dim=1)
+        return x[:, cls_position, :]
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.head(self.forward_features(x))
+
+    @classmethod
+    def from_checkpoint(
+        cls, path: str | Path, map_location: str | torch.device = "cpu"
+    ) -> "VisionMambaCPUFull":
+        payload = torch.load(path, map_location=map_location)
+        config = VimCPUFullConfig(**payload["config"])
         model = cls(config)
         state_dict = payload.get("model_state_dict", payload)
         model.load_state_dict(state_dict)
@@ -378,10 +641,23 @@ def vim_tiny_patch16_224(pretrained: bool = False, **kwargs: Any) -> VisionMamba
     return VisionMamba(config)
 
 
+def vim_tiny_cpu_full(pretrained: bool = False, **kwargs: Any) -> VisionMambaCPUFull:
+    if pretrained:
+        raise ValueError(
+            "The CPU-full Vision Mamba branch does not provide pretrained weights. "
+            "Load a checkpoint explicitly if you need saved parameters."
+        )
+    config = VimCPUFullConfig(**kwargs)
+    return VisionMambaCPUFull(config)
+
+
 __all__ = [
     "PatchEmbed",
     "VimConfig",
+    "VimCPUFullConfig",
     "VisionMamba",
+    "VisionMambaCPUFull",
     "vim_runtime_status",
     "vim_tiny_patch16_224",
+    "vim_tiny_cpu_full",
 ]

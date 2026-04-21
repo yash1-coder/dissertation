@@ -14,7 +14,7 @@ The practical aim is twofold:
 - **Dataset and inputs:** EuroSAT RGB imagery under `data/2750` and the central config file provide the raw inputs and execution settings for the workflow.
 - **Split generation and reproducibility:** `CNN.ipynb` validates the dataset and creates reusable train/validation/test split artefacts plus class mapping and split hashes.
 - **Main notebook pipeline:** `CNN.ipynb` is the orchestration hub for setup, EDA, model execution, evaluation/XAI, and the final comparison stage.
-- **Model branches:** ResNet18, ViT Tiny, and Vision Mamba / Vim are parallel architecture families that reuse the same split files so comparison remains fair and methodologically aligned.
+- **Model branches:** ResNet18, ViT Tiny, Vision Mamba / Vim, and Vision Mamba CPU Full are parallel architecture families that reuse the same split files so comparison remains fair and methodologically aligned.
 - **Evaluation outputs:** each model writes checkpoints, predictions, metrics, classwise summaries, confusion matrices, and training curves into the shared `checkpoints/`, `results/metrics/`, and `results/figures/` folders.
 - **Explainability outputs:** the project produces qualitative and quantitative XAI outputs in `results/heatmaps/` and `results/failure_cases/`, using Grad-CAM for ResNet18, attention rollout for ViT Tiny, and Integrated Gradients/SmoothGrad for Vim.
 - **Final comparison:** the notebook aggregates predictive and explainability outputs into `results/metrics/model_comparison_summary.csv`, with an optional dashboard artefact for reader-facing synthesis.
@@ -22,7 +22,7 @@ The practical aim is twofold:
 
 ## Which models are implemented
 
-The notebook now implements three model families:
+The notebook now implements four model families:
 
 - **ResNet18**
   CNN baseline for EuroSAT classification, with training, evaluation, confusion analysis, qualitative XAI panels, and quantitative XAI metrics.
@@ -32,6 +32,9 @@ The notebook now implements three model families:
 
 - **Vision Mamba / Vim-Tiny**
   State-space baseline for the same task and split, with training, evaluation, confusion analysis, qualitative XAI panels, and quantitative XAI metrics.
+
+- **Vision Mamba CPU Full (`vim_tiny_cpu_full`)**
+  A separate local-compute Vision Mamba-style baseline that keeps bidirectional state-space sequence mixing in pure PyTorch so the full comparison workflow can run on CPU without overwriting the Linux/CUDA Vim path.
 
 ## What “Vim” means in this repository
 
@@ -110,6 +113,20 @@ When `mamba-ssm` cannot be imported (e.g. on macOS or any machine without a CUDA
 
 `vim_runtime_status()` returns `(True, "Vim running with CPU fallback ...")` in this mode.
 
+**CPU-full Vision Mamba branch (local training/evaluation)**
+
+The repository also includes a distinct `VisionMambaCPUFull` branch exposed through `vim_tiny_cpu_full`. This branch is stronger than the lightweight fallback because it preserves the dissertation-critical structure:
+
+- 224/16 patch embedding
+- learnable positional embeddings
+- learnable CLS token
+- stacked bidirectional sequence-mixing blocks
+- pre-norm residual connections
+- post-mixer MLP blocks
+- final normalization and classifier head
+
+Its sequence backend is still pure PyTorch, but it uses an explicit selective-scan-style recurrent update with learned `A`, `B`, `C`, `dt`, and skip parameters instead of the minimal depthwise-conv fallback. This makes it a meaningful local Vision Mamba-style comparison branch while remaining separate from the Linux/CUDA `mamba-ssm` implementation.
+
 **Full CUDA training (Linux remote server)**
 
 The dissertation Vim pipeline is intended for:
@@ -187,6 +204,16 @@ Located under `results/metrics/` and `results/figures/`:
 - `vim_training_curves.png`
 - `vim_confusion_matrix_counts_norm.png`
 
+#### Vision Mamba CPU Full
+
+- `vim_cpu_full_test_metrics.json`
+- `vim_cpu_full_test_predictions.csv`
+- `vim_cpu_full_classwise_metrics.csv`
+- `vim_cpu_full_train_history.json`
+- `vim_cpu_full_xai_quant_metrics.json`
+- `vim_cpu_full_training_curves.png`
+- `vim_cpu_full_confusion_matrix_counts_norm.png`
+
 ### 5. Explainability figures
 
 Located under `results/heatmaps/` and `results/failure_cases/`:
@@ -207,6 +234,11 @@ Located under `results/heatmaps/` and `results/failure_cases/`:
 - `vim_xai_sample_*.png`
 - `vim_misclassified_xai_*.png`
 
+#### Vision Mamba CPU Full
+
+- `vim_cpu_full_xai_sample_*.png`
+- `vim_cpu_full_misclassified_xai_*.png`
+
 ### 6. Final comparison summary
 
 Located under `results/metrics/`:
@@ -218,6 +250,7 @@ This table now includes:
 - ResNet18
 - ViT Tiny
 - Vision Mamba
+- Vision Mamba CPU Full
 - delta rows comparing Vim against the other model families
 
 ## How to interpret the main figures

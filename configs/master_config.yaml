@@ -68,6 +68,10 @@ training:
     num_workers: 0
   vim:
     pretrained: false
+    model_name: vim_tiny_patch16_224
+    image_size: 224
+    patch_size: 16
+    checkpoint_name: vim_tiny_best.pth
     optimizer: AdamW
     lr: 0.0001
     lr_fallback: 1.0e-05
@@ -78,6 +82,31 @@ training:
     batch_size: 64
     num_workers: 0
     fp16: true
+  vim_cpu_full:
+    pretrained: false
+    model_name: vim_tiny_cpu_full
+    image_size: 224
+    patch_size: 16
+    stride: 16
+    checkpoint_name: vim_cpu_full_best.pth
+    optimizer: AdamW
+    lr: 0.0001
+    weight_decay: 0.01
+    scheduler: CosineAnnealingLR
+    warmup_epochs: 3
+    epochs: 12
+    batch_size: 16
+    num_workers: 0
+    fp16: false
+    embed_dim: 128
+    depth: 6
+    d_state: 4
+    d_conv: 4
+    expand: 2
+    mlp_ratio: 4.0
+    drop_rate: 0.0
+    drop_path_rate: 0.1
+    use_middle_cls_token: true
 xai:
   integrated_gradients:
     n_steps: 50

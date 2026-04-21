@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ResNet18 vs ViT Dashboard</title>
+  <title>ResNet18 vs ViT Tiny vs Vision Mamba Dashboard</title>
   <style>
-    :root { --bg:#f4f7f5; --ink:#123; --res:#2f6f9f; --vit:#2a9d8f; --card:#ffffff; --line:#d9e2dc; --warn:#8a5a00; --bad:#8b1e3f; }
+    :root { --bg:#f4f7f5; --ink:#123; --res:#2f6f9f; --vit:#2a9d8f; --vim:#c96f2d; --card:#ffffff; --line:#d9e2dc; --warn:#8a5a00; --bad:#8b1e3f; }
     body { font-family: 'Avenir Next', 'Segoe UI', sans-serif; margin:0; background:var(--bg); color:var(--ink); }
     .wrap { max-width: 1100px; margin: 28px auto; padding: 0 18px; }
     h1 { margin:0 0 8px; font-size: 30px; }
@@ -23,6 +23,7 @@
     .bar { height:100%; border-radius:999px; }
     .bar.resnet { background:var(--res); }
     .bar.vit { background:var(--vit); }
+    .bar.vim { background:var(--vim); }
     table.metrics-table { width:100%; border-collapse:collapse; font-size:13px; }
     .metrics-table th, .metrics-table td { border:1px solid var(--line); padding:8px; text-align:left; }
     .metrics-table thead th { background:#edf3ef; }
@@ -33,7 +34,7 @@
 </head>
 <body>
   <div class="wrap">
-    <h1>ResNet18 vs ViT Tiny</h1>
+    <h1>ResNet18 vs ViT Tiny vs Vision Mamba</h1>
     <div id="status" class="sub">Live refresh every 5s. Loading latest metrics...</div>
     <div id="protocolHint" class="warning" style="display:none"></div>
 
@@ -119,8 +120,14 @@
       return Number.isFinite(n) ? n : 0;
     }
 
+    function hasNum(v) {
+      const n = Number(v);
+      return Number.isFinite(n);
+    }
+
     function fmt6(v) { return toNum(v).toFixed(6); }
     function fmt4(v) { return toNum(v).toFixed(4); }
+    function fmtCell(v) { return hasNum(v) ? Number(v).toFixed(6) : "—"; }
     function pct(v) {
       const raw = toNum(v) * 100;
       const clamped = Math.max(0, Math.min(100, raw));
@@ -136,7 +143,15 @@
       METRICS.forEach((m) => {
         d[m] = (toNum(vit[m]) - toNum(resnet[m])).toString();
       });
+      d.status = "computed";
       return d;
+    }
+
+    function colorClassFor(model) {
+      if (model === "ResNet18") return "resnet";
+      if (model === "ViT Tiny") return "vit";
+      if (model === "Vision Mamba") return "vim";
+      return "resnet";
     }
 
     function render(rows) {
@@ -146,34 +161,46 @@
         throw new Error("CSV is missing required rows: 'ResNet18' and/or 'ViT Tiny'.");
       }
       const delta = rowByName(rows, "Delta (ViT - ResNet18)") || computeDelta(vit, resnet);
+      const vim = rowByName(rows, "Vision Mamba");
+      const baseRows = rows.filter((r) => !String(r.model || "").startsWith("Delta ("));
+      const scoredRows = baseRows.filter((r) => hasNum(r.accuracy) && hasNum(r.macro_f1));
 
-      const bestAcc = toNum(vit.accuracy) >= toNum(resnet.accuracy) ? "ViT Tiny" : "ResNet18";
-      const bestF1 = toNum(vit.macro_f1) >= toNum(resnet.macro_f1) ? "ViT Tiny" : "ResNet18";
+      const bestAcc = scoredRows.reduce((best, row) => !best || Number(row.accuracy) > Number(best.accuracy) ? row : best, null);
+      const bestF1 = scoredRows.reduce((best, row) => !best || Number(row.macro_f1) > Number(best.macro_f1) ? row : best, null);
 
-      elCards.innerHTML = [
-        `<div class="card"><h3>Best Accuracy</h3><p>${bestAcc}</p></div>`,
-        `<div class="card"><h3>Best Macro-F1</h3><p>${bestF1}</p></div>`,
+      const cards = [
+        `<div class="card"><h3>Best Accuracy</h3><p>${bestAcc ? bestAcc.model : "—"}</p></div>`,
+        `<div class="card"><h3>Best Macro-F1</h3><p>${bestF1 ? bestF1.model : "—"}</p></div>`,
         `<div class="card"><h3>Delta Accuracy</h3><p>${toNum(delta.accuracy) >= 0 ? "+" : ""}${fmt6(delta.accuracy)}</p></div>`,
         `<div class="card"><h3>Delta Macro-F1</h3><p>${toNum(delta.macro_f1) >= 0 ? "+" : ""}${fmt6(delta.macro_f1)}</p></div>`
-      ].join("\n");
+      ];
+      if (vim) {
+        cards.push(`<div class="card"><h3>Vision Mamba Status</h3><p>${vim.status || "metrics loaded"}</p></div>`);
+      }
+      elCards.innerHTML = cards.join("\n");
 
       elBars.innerHTML = METRICS.map((m) => {
+        const metricRows = baseRows.filter((r) => hasNum(r[m]));
         return `
           <div class="metric-row">
             <div class="metric-title">${m}</div>
             <div class="bar-group">
-              <div class="bar-label">ResNet18 (${fmt4(resnet[m])})</div>
-              <div class="bar-wrap"><div class="bar resnet" style="width:${pct(resnet[m])}"></div></div>
-              <div class="bar-label">ViT Tiny (${fmt4(vit[m])})</div>
-              <div class="bar-wrap"><div class="bar vit" style="width:${pct(vit[m])}"></div></div>
+              ${metricRows.map((r) => `
+                <div class="bar-label">${r.model} (${fmt4(r[m])})</div>
+                <div class="bar-wrap"><div class="bar ${colorClassFor(r.model)}" style="width:${pct(r[m])}"></div></div>
+              `).join("")}
             </div>
           </div>
         `;
       }).join("\n");
 
-      const head = `<thead><tr>${["model", ...METRICS].map((h) => `<th>${h}</th>`).join("")}</tr></thead>`;
-      const bodyRows = [resnet, vit, delta].map((r) => {
-        const cells = [`<td>${r.model}</td>`].concat(METRICS.map((m) => `<td>${fmt6(r[m])}</td>`));
+      const showStatus = rows.some((r) => (r.status || "").trim().length > 0);
+      const headers = ["model"].concat(showStatus ? ["status"] : []).concat(METRICS);
+      const head = `<thead><tr>${headers.map((h) => `<th>${h}</th>`).join("")}</tr></thead>`;
+      const bodyRows = rows.map((r) => {
+        const cells = [`<td>${r.model}</td>`];
+        if (showStatus) cells.push(`<td>${r.status || ""}</td>`);
+        cells.push(...METRICS.map((m) => `<td>${fmtCell(r[m])}</td>`));
         return `<tr>${cells.join("")}</tr>`;
       }).join("\n");
 

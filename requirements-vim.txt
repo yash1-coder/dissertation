@@ -1,0 +1,6 @@
+# Install with:
+#   pip install --no-build-isolation -r requirements-vim.txt
+# These packages are kept separate from the base notebook stack because
+# upstream Mamba builds are targeted at Linux/NVIDIA environments.
+causal-conv1d>=1.4.0
+mamba-ssm
